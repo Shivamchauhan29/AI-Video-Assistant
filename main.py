@@ -14,7 +14,9 @@ def run_pipeline(source :str, language :str = "english") -> dict:
 
     chunks = process_input(source)
 
-    transcript = transcribe_all(chunks,language)
+    transcription = transcribe_all(chunks, language)
+    transcript = transcription["text"]
+    transcript_segments = transcription["segments"]
     print(f"raw transcription (first 300 characters ) {transcript[:300]}")
 
     title = generate_title(transcript)
@@ -31,6 +33,7 @@ def run_pipeline(source :str, language :str = "english") -> dict:
     return {
         "title": title,
         "transcript": transcript,
+        "transcript_segments": transcript_segments,
         "summary": summary,
         "action_items": action_item,
         "key_decisions": decisions,

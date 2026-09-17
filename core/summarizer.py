@@ -1,13 +1,19 @@
+from langchain_groq import ChatGroq
 from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
-import os 
+import os
 
 def get_llm():
-    return ChatMistralAI(model = "mistral-small-latest", mistral_api_key = os.getenv("MISTRAL_API_KEY"),temperature=0.3)
+    # Groq is primary (fast, generous free tier); Mistral is the fallback
+    # if Groq errors (rate limit, outage, etc.) via LangChain's built-in
+    # runnable fallback — no manual try/except needed at call sites.
+    groq_llm = ChatGroq(model="openai/gpt-oss-120b", groq_api_key=os.getenv("GROQ_API_KEY"), temperature=0.3)
+    mistral_llm = ChatMistralAI(model="mistral-small-latest", mistral_api_key=os.getenv("MISTRAL_API_KEY"), temperature=0.3)
+    return groq_llm.with_fallbacks([mistral_llm])
 
 
 def split_transcript(transcript: str) -> list:

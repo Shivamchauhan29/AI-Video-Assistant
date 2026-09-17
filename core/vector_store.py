@@ -1,5 +1,6 @@
-import os 
-from langchain_chroma import Chroma 
+import os
+import uuid
+from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -29,11 +30,17 @@ def build_vector_store(transcript : str)->Chroma:
     ]
 
     embeddings = get_embeddings()
+
+    # In-memory (no persist_directory) with a per-call collection name:
+    # a shared collection name still leaks documents across calls even
+    # without disk persistence, since Chroma's default in-memory backend
+    # is keyed by collection name at the process level. Without this,
+    # concurrent runs (different sessions/videos) corrupt or contaminate
+    # each other's RAG retrieval.
     vector_store = Chroma.from_documents(
         documents= docs,
         embedding=embeddings,
-        collection_name=COLLECTION_NAME,
-        persist_directory=CHROMA_DIR
+        collection_name=f"{COLLECTION_NAME}_{uuid.uuid4().hex}",
     )
 
     return vector_store

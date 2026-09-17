@@ -15,7 +15,9 @@ language = "english"   # "english" → Whisper, "hinglish" → Sarvam
 chunks = process_input(source)
 
 
-transcript = transcribe_all(chunks, language=language)
+transcription = transcribe_all(chunks, language=language)
+transcript = transcription["text"]
+transcript_segments = transcription["segments"]
 print("\n" + "=" * 60)
 print("📝 TRANSCRIPT")
 print("=" * 60)

@@ -388,7 +388,9 @@ if run_btn:
             update_step("audio", "done")
 
             update_step("transcript", "active")
-            transcript = transcribe_all(chunks, language)
+            transcription = transcribe_all(chunks, language)
+            transcript = transcription["text"]
+            transcript_segments = transcription["segments"]
             update_step("transcript", "done")
 
             update_step("title", "active")
@@ -412,6 +414,7 @@ if run_btn:
             st.session_state.result = {
                 "title": title,
                 "transcript": transcript,
+                "transcript_segments": transcript_segments,
                 "summary": summary,
                 "action_items": action_items,
                 "key_decisions": decisions,

@@ -29,12 +29,47 @@ def load_model():
     return _model 
 
 
-def transcribe_chunk_whisper(chunk_path: str) -> str:
+def transcribe_chunk_whisper(chunk_path: str) -> list:
+    """
+    Transcribe one chunk with Whisper, preserving segment (and word) timing.
 
-    model = load_model()  
+    Returns an ordered list of segments, timestamps relative to the start
+    of this chunk (the caller is responsible for offsetting them into the
+    full recording's timeline):
+        [{"start": float, "end": float, "text": str, "words": [...]}, ...]
+    """
 
-    result = model.transcribe(chunk_path, task="transcribe")  
-    return result["text"]  
+    model = load_model()
+
+    # word_timestamps=True adds DTW alignment cost per segment, but it's
+    # what makes word-level timing available for future clip generation.
+    result = model.transcribe(chunk_path, task="transcribe", word_timestamps=True)
+
+    segments = []
+    for seg in result.get("segments", []):
+        entry = {
+            "start": float(seg["start"]),
+            "end": float(seg["end"]),
+            "text": seg["text"].strip(),
+        }
+        words = seg.get("words")
+        if words:
+            entry["words"] = [
+                {"start": float(w["start"]), "end": float(w["end"]), "word": w["word"]}
+                for w in words
+            ]
+        segments.append(entry)
+
+    return segments
+
+
+def _chunk_duration_seconds(chunk_path: str) -> float:
+    return len(AudioSegment.from_wav(chunk_path)) / 1000.0
+
+
+def segments_to_text(segments: list) -> str:
+    """Flatten an ordered segment list back into the plain transcript string."""
+    return " ".join(seg["text"] for seg in segments).strip()
 
 
 def _send_to_sarvam(piece_path: str) -> str:
@@ -92,32 +127,50 @@ def transcribe_chunk_sarvam(chunk_path: str) -> str:
 
 
 
-def transcribe_chunk(chunk_path: str, language: str = "english") -> str:
+def transcribe_all(chunks: list, language: str = "english") -> dict:
     """
-    Route one chunk to Whisper or Sarvam depending on language choice.
-    - english  → Whisper (local model)
-    - hinglish → Sarvam (translates to English while transcribing)
+    Transcribe every chunk in order and return:
+        {"text": <flat transcript str>, "segments": <list|None>}
+
+    "segments" is a chunk-offset-corrected, ordered list of
+    {"start", "end", "text", "words"} covering the full recording — only
+    populated for the Whisper (english) path. The Sarvam (hinglish) path
+    has no timing information, so "segments" is None there, unchanged
+    from its previous plain-text-only behavior.
     """
-    if language.lower() == "hinglish":
-        return transcribe_chunk_sarvam(chunk_path)
-    return transcribe_chunk_whisper(chunk_path)
-
-
-def transcribe_all(chunks: list, language: str = "english") -> str:
-
-    full_transcript = "" 
 
     engine = "Sarvam AI" if language.lower() == "hinglish" else "Whisper"
     print(f"Using {engine} for transcription.")
 
-    for i, chunk in enumerate(chunks):  
+    if language.lower() == "hinglish":
+        full_transcript = ""
+        for i, chunk in enumerate(chunks):
+            print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
+            full_transcript += transcribe_chunk_sarvam(chunk) + " "
 
+        print("Transcription complete.")
+        return {"text": full_transcript.strip(), "segments": None}
+
+    # English / Whisper path — accumulate segments, offsetting each
+    # chunk's timestamps by the cumulative duration of prior chunks so
+    # they stay relative to the full recording, not the chunk.
+    all_segments = []
+    offset_seconds = 0.0
+
+    for i, chunk in enumerate(chunks):
         print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
 
-        text = transcribe_chunk(chunk, language=language)  
+        chunk_segments = transcribe_chunk_whisper(chunk)
+        for seg in chunk_segments:
+            seg["start"] += offset_seconds
+            seg["end"] += offset_seconds
+            for w in seg.get("words", []):
+                w["start"] += offset_seconds
+                w["end"] += offset_seconds
 
-        full_transcript += text + " "  
+        all_segments.extend(chunk_segments)
+        offset_seconds += _chunk_duration_seconds(chunk)
 
     print("Transcription complete.")
 
-    return full_transcript.strip()  
+    return {"text": segments_to_text(all_segments), "segments": all_segments}
