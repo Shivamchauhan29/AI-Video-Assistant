@@ -1,14 +1,18 @@
+import os
+import uuid
 from dotenv import load_dotenv
 
 
 load_dotenv()
 
 def run_pipeline(source :str, language :str = "english") -> dict:
-    from utils.audio_processor import process_input
+    from utils.audio_processor import process_input, acquire_video_source
     from core.transcriber import transcribe_all
     from core.summarizer import summarize, generate_title
     from core.extractor import extract_action_items, extract_key_decisions, extract_questions
     from core.rag_engine import build_rag_chain, ask_question
+    from core.highlighter import generate_highlights
+    from core.clipper import cut_clips
 
     print("starting AI Video Assistant")
 
@@ -30,6 +34,19 @@ def run_pipeline(source :str, language :str = "english") -> dict:
     
     rag_chain = build_rag_chain(transcript)
 
+    # English/Whisper path only — transcript_segments is None for Hinglish/Sarvam.
+    highlights = generate_highlights(transcript_segments) if transcript_segments else []
+
+    if highlights:
+        try:
+            video_path = acquire_video_source(source)
+            clip_dir = os.path.join("clips", uuid.uuid4().hex)
+            highlights = cut_clips(video_path, highlights, clip_dir)
+        except Exception as clip_exc:
+            # Clip cutting is a bonus on top of an already-successful
+            # analysis — don't let it take down the whole result.
+            print(f"Clip cutting failed (non-fatal): {clip_exc}")
+
     return {
         "title": title,
         "transcript": transcript,
@@ -39,6 +56,7 @@ def run_pipeline(source :str, language :str = "english") -> dict:
         "key_decisions": decisions,
         "open_questions": questions,
         "rag_chain": rag_chain,
+        "highlights": highlights,
     }
 
 if __name__ == "__main__":
@@ -53,6 +71,13 @@ if __name__ == "__main__":
     print(f"\n✅ Action Items:\n{result['action_items']}")
     print(f"\n🔑 Key Decisions:\n{result['key_decisions']}")
     print(f"\n❓ Open Questions:\n{result['open_questions']}")
+    print("=" * 60)
+
+    if result["highlights"]:
+        print("\n🎯 Highlight Candidates:")
+        for clip in result["highlights"]:
+            path_info = f"  -> {clip['path']}" if clip.get("path") else ""
+            print(f"  [{clip['start']:.1f}s - {clip['end']:.1f}s] score={clip['score']}  {clip['reason']}{path_info}")
     print("=" * 60)
 
     # Phase 2 — Chat with your meeting via RAG

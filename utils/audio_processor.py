@@ -175,6 +175,133 @@ def download_youtube_audio(url: str) -> str:
 
 
 # ============================================================
+# YOUTUBE VIDEO DOWNLOAD (for highlight clip cutting)
+# ============================================================
+
+def download_youtube_video(url: str) -> str:
+    """
+    Download a merged video+audio MP4 for a YouTube URL, for cutting
+    highlight clips from. Separate from download_youtube_audio() (which
+    is audio-only, for transcription) — named with a "_video" suffix so
+    the two downloads never collide on disk.
+
+    yt-dlp skips re-downloading if a file already exists at the target
+    path, so calling this again for the same URL is cheap.
+
+    Returns:
+        Absolute path to the downloaded MP4 file.
+    """
+
+    _validate_dependencies()
+
+    print("Downloading YouTube video (for highlight clips)...")
+    print(f"Download directory: {DOWNLOAD_DIR}")
+
+    output_template = str(
+        DOWNLOAD_DIR / "%(title)s_video.%(ext)s"
+    )
+
+    ydl_opts = {
+        # Best available video+audio, merged
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+
+        "outtmpl": output_template,
+        "noplaylist": True,
+
+        "retries": 3,
+        "fragment_retries": 3,
+
+        "js_runtimes": {
+            "deno": {
+                "path": DENO_PATH,
+            }
+        },
+
+        "ffmpeg_location": FFMPEG_PATH,
+
+        "quiet": False,
+        "noprogress": False,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+
+            info = ydl.extract_info(
+                url,
+                download=True
+            )
+
+            # Merging always produces the container set in merge_output_format.
+            video_path = Path(
+                ydl.prepare_filename(info)
+            ).with_suffix(".mp4")
+
+            if not video_path.exists():
+
+                possible_files = list(
+                    DOWNLOAD_DIR.glob(
+                        f"{video_path.stem}.*"
+                    )
+                )
+
+                mp4_files = [
+                    file
+                    for file in possible_files
+                    if file.suffix.lower() == ".mp4"
+                ]
+
+                if mp4_files:
+                    video_path = mp4_files[0]
+
+                else:
+                    raise FileNotFoundError(
+                        "\nYouTube video download completed, but the "
+                        "expected MP4 file was not found.\n\n"
+                        f"Expected:\n{video_path}\n\n"
+                        f"Download directory:\n{DOWNLOAD_DIR}"
+                    )
+
+            print(
+                f"✓ YouTube video downloaded successfully:\n"
+                f"  {video_path}"
+            )
+
+            return str(video_path)
+
+    except Exception as exc:
+        raise RuntimeError(
+            f"\nFailed to download YouTube video.\n\n"
+            f"URL: {url}\n"
+            f"Error: {exc}"
+        ) from exc
+
+
+def acquire_video_source(source: str) -> str:
+    """
+    Resolve the video file to cut highlight clips from.
+
+    - YouTube URL: downloads a merged video+audio MP4.
+    - Local file path: used directly, no extra download — it's already
+      the full source video/audio on disk.
+    """
+
+    source = source.strip()
+
+    if source.startswith("http://") or source.startswith("https://"):
+        return download_youtube_video(source)
+
+    local_path = Path(source).expanduser().resolve()
+
+    if not local_path.exists():
+        raise FileNotFoundError(
+            f"\nLocal video source not found:\n{local_path}"
+        )
+
+    return str(local_path)
+
+
+# ============================================================
 # AUDIO → WAV CONVERSION
 # ============================================================
 

@@ -1,5 +1,7 @@
 import streamlit as st
 import time
+import uuid
+import os
 from dotenv import load_dotenv
 from core.rag_engine import build_rag_chain, ask_question
 
@@ -350,6 +352,8 @@ with st.sidebar:
             ("summary",    "📋", "Summarisation"),
             ("extract",    "🔍", "Extraction"),
             ("rag",        "🧠", "RAG Engine"),
+            ("highlights", "🎯", "Highlight Detection"),
+            ("clips",      "✂️", "Clip Cutting"),
         ]:
             render_step_bar(label, step, icon)
 
@@ -363,11 +367,13 @@ if run_btn:
     if not source.strip():
         st.error("Please enter a YouTube URL or file path.")
     else:
-        from utils.audio_processor import process_input
+        from utils.audio_processor import process_input, acquire_video_source
         from core.transcriber import transcribe_all
         from core.summarizer import summarize, generate_title
         from core.extractor import extract_action_items, extract_key_decisions, extract_questions
         from core.rag_engine import build_rag_chain, ask_question
+        from core.highlighter import generate_highlights
+        from core.clipper import cut_clips
 
         st.session_state.pipeline_done = False
         st.session_state.result = None
@@ -411,6 +417,23 @@ if run_btn:
             rag_chain = build_rag_chain(transcript)
             update_step("rag", "done")
 
+            update_step("highlights", "active")
+            # English/Whisper path only — transcript_segments is None for Hinglish/Sarvam.
+            highlights = generate_highlights(transcript_segments) if transcript_segments else []
+            update_step("highlights", "done")
+
+            update_step("clips", "active")
+            if highlights:
+                try:
+                    video_path = acquire_video_source(source)
+                    clip_dir = os.path.join("clips", uuid.uuid4().hex)
+                    highlights = cut_clips(video_path, highlights, clip_dir)
+                except Exception as clip_exc:
+                    # Clip cutting is a bonus on top of an already-successful
+                    # analysis — don't let it take down the whole result.
+                    print(f"Clip cutting failed (non-fatal): {clip_exc}")
+            update_step("clips", "done")
+
             st.session_state.result = {
                 "title": title,
                 "transcript": transcript,
@@ -420,6 +443,7 @@ if run_btn:
                 "key_decisions": decisions,
                 "open_questions": questions,
                 "rag_chain": rag_chain,
+                "highlights": highlights,
             }
             st.session_state.pipeline_done = True
             progress_placeholder.success("✅ Analysis complete!")
@@ -428,7 +452,7 @@ if run_btn:
             st.rerun()
 
         except Exception as e:
-            for k in ["audio","transcript","title","summary","extract","rag"]:
+            for k in ["audio","transcript","title","summary","extract","rag","highlights","clips"]:
                 if st.session_state.pipeline_steps.get(k) == "active":
                     st.session_state.pipeline_steps[k] = "pending"
             progress_placeholder.error(f"❌ Error: {e}")
@@ -483,6 +507,35 @@ if st.session_state.result:
             <div class="card-title">❓ Open Questions</div>
             <div class="card-content">{r['open_questions']}</div>
         </div>""", unsafe_allow_html=True)
+
+    # ── Highlight / Reel Candidates ───────────────────────────────────────────
+    if r.get("highlights"):
+        st.markdown('<div style="font-family:\'Syne\',sans-serif;font-size:1.2rem;font-weight:700;margin:1rem 0">🎯 Highlight Candidates</div>', unsafe_allow_html=True)
+
+        def _fmt_ts(seconds):
+            m, s = divmod(int(seconds), 60)
+            return f"{m:02d}:{s:02d}"
+
+        hcols = st.columns(len(r["highlights"]), gap="medium")
+        for i, (hcol, clip) in enumerate(zip(hcols, r["highlights"])):
+            with hcol:
+                st.markdown(f"""
+                <div class="card">
+                    <div class="card-title">⏱️ {_fmt_ts(clip['start'])} – {_fmt_ts(clip['end'])} &nbsp;·&nbsp; Score {clip['score']}</div>
+                    <div class="card-content">{clip['reason']}</div>
+                </div>""", unsafe_allow_html=True)
+
+                clip_path = clip.get("path")
+                if clip_path and os.path.exists(clip_path):
+                    with open(clip_path, "rb") as f:
+                        st.download_button(
+                            "⬇️ Download clip",
+                            data=f.read(),
+                            file_name=os.path.basename(clip_path),
+                            mime="video/mp4",
+                            key=f"download_clip_{i}",
+                            use_container_width=True,
+                        )
 
     st.markdown("---")
 
