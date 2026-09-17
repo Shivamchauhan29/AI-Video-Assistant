@@ -5,6 +5,8 @@ from pathlib import Path
 import yt_dlp
 from pydub import AudioSegment
 
+from core.pipeline_logger import log_if
+
 
 # ============================================================
 # CONFIGURATION
@@ -56,7 +58,7 @@ def _validate_dependencies() -> None:
 # YOUTUBE DOWNLOAD
 # ============================================================
 
-def download_youtube_audio(url: str) -> str:
+def download_youtube_audio(url: str, logger=None) -> str:
     """
     Download audio from a YouTube URL and convert it to WAV.
 
@@ -68,6 +70,7 @@ def download_youtube_audio(url: str) -> str:
 
     print("Downloading YouTube audio...")
     print(f"Download directory: {DOWNLOAD_DIR}")
+    log_if(logger, "Audio", "Downloading YouTube audio...")
 
     output_template = str(
         DOWNLOAD_DIR / "%(title)s.%(ext)s"
@@ -163,6 +166,7 @@ def download_youtube_audio(url: str) -> str:
                 f"✓ YouTube audio downloaded successfully:\n"
                 f"  {wav_path}"
             )
+            log_if(logger, "Audio", "Audio download complete")
 
             return str(wav_path)
 
@@ -178,7 +182,7 @@ def download_youtube_audio(url: str) -> str:
 # YOUTUBE VIDEO DOWNLOAD (for highlight clip cutting)
 # ============================================================
 
-def download_youtube_video(url: str) -> str:
+def download_youtube_video(url: str, logger=None) -> str:
     """
     Download a merged video+audio MP4 for a YouTube URL, for cutting
     highlight clips from. Separate from download_youtube_audio() (which
@@ -196,6 +200,7 @@ def download_youtube_video(url: str) -> str:
 
     print("Downloading YouTube video (for highlight clips)...")
     print(f"Download directory: {DOWNLOAD_DIR}")
+    log_if(logger, "Clip Cutting", "Downloading source video for clipping...")
 
     output_template = str(
         DOWNLOAD_DIR / "%(title)s_video.%(ext)s"
@@ -266,6 +271,7 @@ def download_youtube_video(url: str) -> str:
                 f"✓ YouTube video downloaded successfully:\n"
                 f"  {video_path}"
             )
+            log_if(logger, "Clip Cutting", "Source video ready")
 
             return str(video_path)
 
@@ -277,7 +283,7 @@ def download_youtube_video(url: str) -> str:
         ) from exc
 
 
-def acquire_video_source(source: str) -> str:
+def acquire_video_source(source: str, logger=None) -> str:
     """
     Resolve the video file to cut highlight clips from.
 
@@ -289,8 +295,9 @@ def acquire_video_source(source: str) -> str:
     source = source.strip()
 
     if source.startswith("http://") or source.startswith("https://"):
-        return download_youtube_video(source)
+        return download_youtube_video(source, logger=logger)
 
+    log_if(logger, "Clip Cutting", "Using local file as video source")
     local_path = Path(source).expanduser().resolve()
 
     if not local_path.exists():
@@ -512,7 +519,7 @@ def chunk_audio(
 # MAIN PROCESSING PIPELINE
 # ============================================================
 
-def process_input(source: str) -> list[str]:
+def process_input(source: str, logger=None) -> list[str]:
     """
     Process either:
 
@@ -574,9 +581,10 @@ def process_input(source: str) -> list[str]:
         print(
             "========================================"
         )
+        log_if(logger, "Audio", "YouTube source detected")
 
         wav_path = download_youtube_audio(
-            source
+            source, logger=logger
         )
 
         # Normalize downloaded WAV
@@ -597,6 +605,7 @@ def process_input(source: str) -> list[str]:
         print(
             "========================================"
         )
+        log_if(logger, "Audio", "Local file source detected")
 
         wav_path = convert_to_wav(
             source
@@ -613,6 +622,7 @@ def process_input(source: str) -> list[str]:
     print(
         "========================================"
     )
+    log_if(logger, "Audio", "Chunking audio...")
 
     chunks = chunk_audio(
         wav_path,
@@ -623,5 +633,6 @@ def process_input(source: str) -> list[str]:
         f"\n✓ Audio ready — "
         f"{len(chunks)} chunk(s) created."
     )
+    log_if(logger, "Audio", f"Audio ready — {len(chunks)} chunk(s)")
 
     return chunks

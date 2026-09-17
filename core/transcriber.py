@@ -1,7 +1,10 @@
 import whisper
 import os
+import time
 import requests
 from pydub import AudioSegment
+
+from core.pipeline_logger import log_if, format_duration
 
 # Sarvam's sync STT-translate API rejects audio longer than 30s.
 # We slice each chunk into 25s pieces (with a 5s safety margin) before sending.
@@ -127,7 +130,7 @@ def transcribe_chunk_sarvam(chunk_path: str) -> str:
 
 
 
-def transcribe_all(chunks: list, language: str = "english") -> dict:
+def transcribe_all(chunks: list, language: str = "english", logger=None) -> dict:
     """
     Transcribe every chunk in order and return:
         {"text": <flat transcript str>, "segments": <list|None>}
@@ -141,14 +144,18 @@ def transcribe_all(chunks: list, language: str = "english") -> dict:
 
     engine = "Sarvam AI" if language.lower() == "hinglish" else "Whisper"
     print(f"Using {engine} for transcription.")
+    log_if(logger, "Transcription", f"Using {engine} for {len(chunks)} chunk(s)")
 
     if language.lower() == "hinglish":
         full_transcript = ""
         for i, chunk in enumerate(chunks):
             print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
+            t0 = time.monotonic()
             full_transcript += transcribe_chunk_sarvam(chunk) + " "
+            log_if(logger, "Transcription", f"Chunk {i + 1}/{len(chunks)} done ({format_duration(time.monotonic() - t0)})")
 
         print("Transcription complete.")
+        log_if(logger, "Transcription", "Transcription complete")
         return {"text": full_transcript.strip(), "segments": None}
 
     # English / Whisper path — accumulate segments, offsetting each
@@ -159,6 +166,7 @@ def transcribe_all(chunks: list, language: str = "english") -> dict:
 
     for i, chunk in enumerate(chunks):
         print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
+        t0 = time.monotonic()
 
         chunk_segments = transcribe_chunk_whisper(chunk)
         for seg in chunk_segments:
@@ -170,7 +178,9 @@ def transcribe_all(chunks: list, language: str = "english") -> dict:
 
         all_segments.extend(chunk_segments)
         offset_seconds += _chunk_duration_seconds(chunk)
+        log_if(logger, "Transcription", f"Chunk {i + 1}/{len(chunks)} done ({format_duration(time.monotonic() - t0)})")
 
     print("Transcription complete.")
+    log_if(logger, "Transcription", "Transcription complete")
 
     return {"text": segments_to_text(all_segments), "segments": all_segments}

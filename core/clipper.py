@@ -2,6 +2,8 @@ import os
 import shutil
 import subprocess
 
+from core.pipeline_logger import log_if
+
 FFMPEG_PATH = shutil.which("ffmpeg")
 
 # Seconds of margin for the fast (input-side) seek before doing an
@@ -58,7 +60,7 @@ def _cut_one_clip(video_path: str, start: float, end: float, output_path: str) -
         )
 
 
-def cut_clips(video_path: str, clips: list, output_dir: str) -> list:
+def cut_clips(video_path: str, clips: list, output_dir: str, logger=None) -> list:
     """
     Cut each clip's [start, end] range out of video_path into its own
     re-encoded MP4 (re-encoding, not stream-copy, so the cut lands
@@ -69,11 +71,13 @@ def cut_clips(video_path: str, clips: list, output_dir: str) -> list:
     """
 
     os.makedirs(output_dir, exist_ok=True)
+    log_if(logger, "Clip Cutting", f"Cutting {len(clips)} clip(s)...")
 
     results = []
     for i, clip in enumerate(clips):
         output_path = os.path.join(output_dir, f"highlight_{i}.mp4")
         _cut_one_clip(video_path, clip["start"], clip["end"], output_path)
         results.append({**clip, "path": output_path})
+        log_if(logger, "Clip Cutting", f"{os.path.basename(output_path)} done")
 
     return results

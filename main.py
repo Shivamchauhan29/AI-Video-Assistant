@@ -2,6 +2,7 @@ import os
 import uuid
 from dotenv import load_dotenv
 
+from core.pipeline_logger import PipelineLogger
 
 load_dotenv()
 
@@ -16,32 +17,36 @@ def run_pipeline(source :str, language :str = "english") -> dict:
 
     print("starting AI Video Assistant")
 
-    chunks = process_input(source)
+    # No on_log callback needed here — log() always prints, so the CLI gets
+    # the same structured "[Stage] message" lines as the UI for free.
+    logger = PipelineLogger()
 
-    transcription = transcribe_all(chunks, language)
+    chunks = process_input(source, logger=logger)
+
+    transcription = transcribe_all(chunks, language, logger=logger)
     transcript = transcription["text"]
     transcript_segments = transcription["segments"]
     print(f"raw transcription (first 300 characters ) {transcript[:300]}")
 
-    title = generate_title(transcript)
+    title = generate_title(transcript, logger=logger)
 
-    summary = summarize(transcript)
+    summary = summarize(transcript, logger=logger)
 
-    action_item = extract_action_items(transcript)
+    action_item = extract_action_items(transcript, logger=logger)
 
-    decisions = extract_key_decisions(transcript)
-    questions = extract_questions(transcript)
-    
-    rag_chain = build_rag_chain(transcript)
+    decisions = extract_key_decisions(transcript, logger=logger)
+    questions = extract_questions(transcript, logger=logger)
+
+    rag_chain = build_rag_chain(transcript, logger=logger)
 
     # English/Whisper path only — transcript_segments is None for Hinglish/Sarvam.
-    highlights = generate_highlights(transcript_segments) if transcript_segments else []
+    highlights = generate_highlights(transcript_segments, logger=logger) if transcript_segments else []
 
     if highlights:
         try:
-            video_path = acquire_video_source(source)
+            video_path = acquire_video_source(source, logger=logger)
             clip_dir = os.path.join("clips", uuid.uuid4().hex)
-            highlights = cut_clips(video_path, highlights, clip_dir)
+            highlights = cut_clips(video_path, highlights, clip_dir, logger=logger)
         except Exception as clip_exc:
             # Clip cutting is a bonus on top of an already-successful
             # analysis — don't let it take down the whole result.
@@ -78,6 +83,12 @@ if __name__ == "__main__":
         for clip in result["highlights"]:
             path_info = f"  -> {clip['path']}" if clip.get("path") else ""
             print(f"  [{clip['start']:.1f}s - {clip['end']:.1f}s] score={clip['score']}  {clip['reason']}{path_info}")
+            if clip.get("title"):
+                print(f"      Title: {clip['title']}")
+            if clip.get("description"):
+                print(f"      Description: {clip['description']}")
+            if clip.get("tags"):
+                print(f"      Tags: {', '.join(clip['tags'])}")
     print("=" * 60)
 
     # Phase 2 — Chat with your meeting via RAG

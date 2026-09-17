@@ -7,6 +7,8 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
 import os
 
+from core.pipeline_logger import log_if
+
 def get_llm():
     # Groq is primary (fast, generous free tier); Mistral is the fallback
     # if Groq errors (rate limit, outage, etc.) via LangChain's built-in
@@ -24,7 +26,7 @@ def split_transcript(transcript: str) -> list:
 
     return splitter.split_text(transcript)
 
-def summarize(transcript : str) -> str:
+def summarize(transcript : str, logger=None) -> str:
     llm = get_llm()
 
     map_prompt = ChatPromptTemplate.from_messages(
@@ -37,8 +39,12 @@ def summarize(transcript : str) -> str:
     map_chain = map_prompt | llm | StrOutputParser()
 
     chunks = split_transcript(transcript)
+    log_if(logger, "Summarization", f"Split transcript into {len(chunks)} chunk(s)")
 
-    chunk_summaries = [map_chain.invoke({"text" : chunk}) for chunk in chunks]
+    chunk_summaries = []
+    for i, chunk in enumerate(chunks):
+        chunk_summaries.append(map_chain.invoke({"text": chunk}))
+        log_if(logger, "Summarization", f"Summarized chunk {i + 1}/{len(chunks)}")
 
     combined = "\n\n".join(chunk_summaries)
 
@@ -57,15 +63,18 @@ def summarize(transcript : str) -> str:
         RunnablePassthrough() | RunnableLambda(lambda x:{"text":x}) | combined_prompt | llm | StrOutputParser()
     )
 
-    return combined_chain.invoke(combined)
+    log_if(logger, "Summarization", "Combining chunk summaries...")
+    result = combined_chain.invoke(combined)
+    log_if(logger, "Summarization", "Summary complete")
+    return result
 
-def generate_title(transcipt : str) -> str:
+def generate_title(transcipt : str, logger=None) -> str:
     llm = get_llm()
 
-    
+    log_if(logger, "Title", "Generating title...")
 
     title_chain = (
-        RunnablePassthrough() | RunnableLambda(lambda x:{"text":x}) | 
+        RunnablePassthrough() | RunnableLambda(lambda x:{"text":x}) |
         ChatPromptTemplate.from_messages([
              (
                 "system",
@@ -78,7 +87,9 @@ def generate_title(transcipt : str) -> str:
         |StrOutputParser()
     )
 
-    return title_chain.invoke(transcipt[:2000])
+    result = title_chain.invoke(transcipt[:2000])
+    log_if(logger, "Title", "Title generated")
+    return result
 
 
 

@@ -5,6 +5,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
+from core.pipeline_logger import log_if
+
 CHROMA_DIR = "vector_db"
 COLLECTION_NAME = "meeting_transcript"
 EMBEDDING_MODEL  = "all-MiniLM-L6-v2"
@@ -15,8 +17,9 @@ def get_embeddings():
         model_kwargs = {"device" : 'cpu'}
     )
 
-def build_vector_store(transcript : str)->Chroma:
+def build_vector_store(transcript : str, logger=None)->Chroma:
     print("Building vector Store")
+    log_if(logger, "Vector Store", "Splitting transcript for embedding...")
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size = 500,
@@ -29,6 +32,7 @@ def build_vector_store(transcript : str)->Chroma:
         for i,chunk in enumerate(chunks)
     ]
 
+    log_if(logger, "Vector Store", f"Embedding {len(docs)} chunk(s)...")
     embeddings = get_embeddings()
 
     # In-memory (no persist_directory) with a per-call collection name:
@@ -43,6 +47,7 @@ def build_vector_store(transcript : str)->Chroma:
         collection_name=f"{COLLECTION_NAME}_{uuid.uuid4().hex}",
     )
 
+    log_if(logger, "Vector Store", "Vector store ready")
     return vector_store
 
 

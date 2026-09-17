@@ -1,15 +1,25 @@
 import os
-import json
 
 from langchain_groq import ChatGroq
 from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
+from core.pipeline_logger import log_if
+
 MIN_WINDOW_SECONDS = 30.0
 MAX_WINDOW_SECONDS = 60.0
 OVERLAP_RATIO = 0.5
 MAX_CLIPS = 3
+
+# Guardrail from the requirements: batch at most this many windows into a
+# single prompt. Videos with more candidates get multiple sequential
+# batched calls instead of one call per window.
+BATCH_SIZE = 15
+
+TITLE_HARD_CAP = 100
+TAGS_MAX_COUNT = 15
+TAGS_MAX_CHARS = 500
 
 
 def get_llm():
@@ -24,6 +34,7 @@ def generate_candidate_windows(
     min_duration: float = MIN_WINDOW_SECONDS,
     max_duration: float = MAX_WINDOW_SECONDS,
     overlap_ratio: float = OVERLAP_RATIO,
+    logger=None,
 ) -> list:
     """
     Group consecutive segments into ~30-60s windows, never splitting a
@@ -76,64 +87,141 @@ def generate_candidate_windows(
 
         start_idx = next_start_idx
 
+    log_if(logger, "Highlight Detection", f"Generated {len(windows)} candidate window(s)")
     return windows
 
 
-def build_scoring_chain():
+def build_batch_chain():
+    """
+    One chain that scores AND generates Shorts metadata for a whole batch
+    of candidate windows in a single call, instead of a separate call per
+    window (scoring) plus a separate call per selected clip (metadata).
+    """
     llm = get_llm()
 
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                "You are an expert short-form video editor. Score the following "
-                "transcript excerpt for how well it would work as a standalone "
-                "social-media highlight/reel, from 0 to 100. Consider:\n"
+                "You are an expert short-form video editor and YouTube Shorts "
+                "strategist. You will be given a numbered list of transcript "
+                "excerpts (candidate clips) from a longer video. Evaluate EACH "
+                "one independently and return both a reel-worthiness score and "
+                "ready-to-publish Shorts metadata for it.\n\n"
+                "Score 0-100 based on:\n"
                 "- Standalone coherence: does it make sense without outside context?\n"
                 "- Hook strength: does the first ~5 seconds grab attention?\n"
                 "- Information density / quotability: is it punchy and memorable?\n\n"
-                "Respond with ONLY a JSON object of the exact form:\n"
-                '{{"score": <integer 0-100>, "reason": "<one-line reason>"}}',
+                "Also generate for each window:\n"
+                "- title: a punchy, clickable title. Ideally under 60 characters, "
+                f"never over {TITLE_HARD_CAP}.\n"
+                "- description: a short YouTube Shorts description ending with "
+                "#Shorts plus 2-4 other relevant hashtags.\n"
+                f"- tags: {TAGS_MAX_COUNT - 7}-{TAGS_MAX_COUNT} short keyword tags "
+                f"as a JSON array of strings, combined length under {TAGS_MAX_CHARS} characters.\n"
+                "- reason: one line explaining the score.\n\n"
+                "Respond with ONLY a JSON array, one object per window, preserving "
+                "window_index from the input, in exactly this form:\n"
+                '[{{"window_index": <int>, "score": <int 0-100>, "reason": "<string>", '
+                '"title": "<string>", "description": "<string>", "tags": ["<string>", ...]}}, ...]',
             ),
-            ("human", "{text}"),
+            ("human", "{windows}"),
         ]
     )
 
     return prompt | llm | JsonOutputParser()
 
 
-def score_window(chain, text: str) -> dict:
-    """Score one window's text, returning {"score": int, "reason": str}."""
+def _format_windows_prompt(windows: list) -> str:
+    lines = [
+        f"Window {i} [{w['start']:.1f}s - {w['end']:.1f}s]: {w['text']}"
+        for i, w in enumerate(windows)
+    ]
+    return "\n\n".join(lines)
+
+
+def _default_fields(reason: str) -> dict:
+    return {"score": 0, "reason": reason, "title": "", "description": "", "tags": []}
+
+
+def _normalize_fields(item: dict) -> dict:
     try:
-        result = chain.invoke({"text": text})
-        score = int(result["score"])
-        reason = str(result["reason"]).strip()
+        score = max(0, min(100, int(item.get("score", 0))))
+    except (TypeError, ValueError):
+        score = 0
+
+    reason = str(item.get("reason", "")).strip()
+    title = str(item.get("title", "")).strip()[:TITLE_HARD_CAP]
+    description = str(item.get("description", "")).strip()
+
+    tags = item.get("tags", [])
+    if not isinstance(tags, list):
+        tags = [tags]
+    tags = [str(t).strip() for t in tags if str(t).strip()][:TAGS_MAX_COUNT]
+    while tags and sum(len(t) for t in tags) > TAGS_MAX_CHARS:
+        tags.pop()
+
+    return {"score": score, "reason": reason, "title": title, "description": description, "tags": tags}
+
+
+def _score_and_describe_batch(chain, batch: list) -> dict:
+    """Runs one batched LLM call for `batch`. Returns {local_index: fields}."""
+    try:
+        result = chain.invoke({"windows": _format_windows_prompt(batch)})
     except Exception as e:
-        score, reason = 0, f"scoring failed: {e}"
+        return {i: _default_fields(f"batch scoring failed: {e}") for i in range(len(batch))}
 
-    score = max(0, min(100, score))
-    return {"score": score, "reason": reason}
+    by_index = {}
+    if isinstance(result, list):
+        for item in result:
+            try:
+                idx = int(item["window_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_index[idx] = _normalize_fields(item)
+
+    for i in range(len(batch)):
+        if i not in by_index:
+            by_index[i] = _default_fields("missing from batch response")
+
+    return by_index
 
 
-def score_candidate_windows(windows: list) -> list:
-    """Sequentially score every window. Returns windows with score/reason added."""
+def score_candidate_windows(windows: list, logger=None) -> list:
+    """
+    Score every window AND generate its Shorts metadata (title, description,
+    tags) in as few LLM calls as possible: one call per BATCH_SIZE windows,
+    not one call per window.
+
+    Returns windows with score/reason/title/description/tags added.
+    """
     if not windows:
         return []
 
-    chain = build_scoring_chain()
-    scored = []
-    for window in windows:
-        result = score_window(chain, window["text"])
-        scored.append({**window, **result})
+    chain = build_batch_chain()
+    scored = list(windows)
+    total = len(windows)
+
+    for batch_start in range(0, total, BATCH_SIZE):
+        batch = windows[batch_start: batch_start + BATCH_SIZE]
+        fields_by_local_index = _score_and_describe_batch(chain, batch)
+
+        for local_i in sorted(fields_by_local_index.keys()):
+            fields = fields_by_local_index[local_i]
+            global_i = batch_start + local_i
+            if 0 <= global_i < len(scored):
+                scored[global_i] = {**scored[global_i], **fields}
+                log_if(logger, "Highlight Detection", f"Scored window {global_i + 1}/{total} (score={fields['score']})")
 
     return scored
 
 
-def select_highlight_clips(scored_windows: list, max_clips: int = MAX_CLIPS) -> list:
+def select_highlight_clips(scored_windows: list, max_clips: int = MAX_CLIPS, logger=None) -> list:
     """
     Sort by score descending, greedily pick non-overlapping windows
     (discarding any candidate overlapping an already-picked one) until
-    max_clips are selected or candidates run out.
+    max_clips are selected or candidates run out. No LLM calls here — score
+    is already populated by score_candidate_windows().
     """
     ranked = sorted(scored_windows, key=lambda w: w["score"], reverse=True)
 
@@ -151,18 +239,20 @@ def select_highlight_clips(scored_windows: list, max_clips: int = MAX_CLIPS) -> 
             break
 
     selected.sort(key=lambda w: w["start"])
+    log_if(logger, "Highlight Detection", f"Selected {len(selected)} final clip(s)")
     return selected
 
 
-def generate_highlights(segments: list) -> list:
+def generate_highlights(segments: list, logger=None) -> list:
     """
     English/Whisper path only. Given transcript_segments, returns up to
-    MAX_CLIPS non-overlapping highlight candidates:
-        [{"start", "end", "score", "reason", "text"}, ...]
+    MAX_CLIPS non-overlapping highlight candidates, each already carrying
+    its Shorts metadata from the single batched scoring+metadata call:
+        [{"start", "end", "score", "reason", "title", "description", "tags", "text"}, ...]
     """
     if not segments:
         return []
 
-    windows = generate_candidate_windows(segments)
-    scored = score_candidate_windows(windows)
-    return select_highlight_clips(scored)
+    windows = generate_candidate_windows(segments, logger=logger)
+    scored = score_candidate_windows(windows, logger=logger)
+    return select_highlight_clips(scored, logger=logger)
