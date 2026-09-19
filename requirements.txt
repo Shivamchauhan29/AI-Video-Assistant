@@ -7,10 +7,9 @@ yt-dlp>=2026.8.19
 pydub==0.25.1
 ffmpeg-python==0.2.0
 
-# ── Speech-to-Text (local Whisper) ──────────────────────────────────────────────
-openai-whisper==20250625
+# ── Speech-to-Text (local Whisper, CTranslate2-backed for speed) ────────────────
+faster-whisper==1.2.1
 torch==2.13.0
-torchaudio==2.11.0
 
 # ── Translation (Hindi → English) ───────────────────────────────────────────────
 deep-translator==1.11.4
@@ -22,6 +21,7 @@ langchain-community==0.4.2
 langchain-groq==1.1.3
 langchain-mistralai==1.1.6
 mistralai==2.9.3
+groq==0.37.1
 
 # ── RAG Pipeline ─────────────────────────────────────────────────────────────────
 chromadb==1.5.9

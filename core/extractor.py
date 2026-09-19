@@ -1,25 +1,19 @@
-#Actionableitems , decision , questions 
+#Actionableitems , decision , questions
 
-from langchain_groq import ChatGroq
-from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-import os
 
 from core.pipeline_logger import log_if
+from core.llm_provider import get_llm as _get_llm
 
 
-def get_llm():
-    # Groq is primary; falls back to Mistral automatically on error (see summarizer.py).
-    groq_llm = ChatGroq(model="openai/gpt-oss-120b", groq_api_key=os.getenv("GROQ_API_KEY"), temperature=0.2)
-    mistral_llm = ChatMistralAI(model="mistral-small-latest", mistral_api_key=os.getenv("MISTRAL_API_KEY"), temperature=0.2)
-    return groq_llm.with_fallbacks([mistral_llm])
+def get_llm(logger=None):
+    return _get_llm(temperature=0.2, logger=logger)
 
 
-
-def build_chain(system_prompt : str):
-    llm = get_llm()
+def build_chain(system_prompt : str, logger=None):
+    llm = get_llm(logger=logger)
     return (
         RunnablePassthrough() | RunnableLambda(lambda x : {"text" : x}) |ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -35,7 +29,8 @@ def extract_action_items(transcript:str, logger=None)->str:
         "- Task description\n"
         "- Owner (who is responsible)\n"
         "- Deadline (if mentioned, else write 'Not specified')\n\n"
-        "Format as a numbered list. If none found say 'No action items found.'"
+        "Format as a numbered list. If none found say 'No action items found.'",
+        logger=logger,
     )
 
     result = chain.invoke(transcript)
@@ -48,7 +43,8 @@ def extract_key_decisions(transcript: str, logger=None) -> str:
     chain = build_chain(
         "You are an expert meeting analyst. From the meeting transcript, "
         "extract all key decisions made. Format as a numbered list. "
-        "If none found say 'No key decisions found.'"
+        "If none found say 'No key decisions found.'",
+        logger=logger,
     )
     result = chain.invoke(transcript)
     log_if(logger, "Extraction", "Key decisions extracted")
@@ -60,7 +56,8 @@ def extract_questions(transcript: str, logger=None) -> str:
     chain = build_chain(
         "From the meeting transcript, extract all unresolved questions "
         "or topics needing follow-up. Format as a numbered list. "
-        "If none found say 'No open questions found.'"
+        "If none found say 'No open questions found.'",
+        logger=logger,
     )
     result = chain.invoke(transcript)
     log_if(logger, "Extraction", "Open questions extracted")

@@ -1,11 +1,8 @@
-import os
-
-from langchain_groq import ChatGroq
-from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from core.pipeline_logger import log_if
+from core.llm_provider import get_llm as _get_llm
 
 MIN_WINDOW_SECONDS = 30.0
 MAX_WINDOW_SECONDS = 60.0
@@ -22,11 +19,8 @@ TAGS_MAX_COUNT = 15
 TAGS_MAX_CHARS = 500
 
 
-def get_llm():
-    # Same pattern as summarizer.py/extractor.py: Groq primary, Mistral fallback.
-    groq_llm = ChatGroq(model="openai/gpt-oss-120b", groq_api_key=os.getenv("GROQ_API_KEY"), temperature=0.2)
-    mistral_llm = ChatMistralAI(model="mistral-small-latest", mistral_api_key=os.getenv("MISTRAL_API_KEY"), temperature=0.2)
-    return groq_llm.with_fallbacks([mistral_llm])
+def get_llm(logger=None):
+    return _get_llm(temperature=0.2, logger=logger)
 
 
 def generate_candidate_windows(
@@ -91,13 +85,13 @@ def generate_candidate_windows(
     return windows
 
 
-def build_batch_chain():
+def build_batch_chain(logger=None):
     """
     One chain that scores AND generates Shorts metadata for a whole batch
     of candidate windows in a single call, instead of a separate call per
     window (scoring) plus a separate call per selected clip (metadata).
     """
-    llm = get_llm()
+    llm = get_llm(logger=logger)
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -198,7 +192,7 @@ def score_candidate_windows(windows: list, logger=None) -> list:
     if not windows:
         return []
 
-    chain = build_batch_chain()
+    chain = build_batch_chain(logger=logger)
     scored = list(windows)
     total = len(windows)
 

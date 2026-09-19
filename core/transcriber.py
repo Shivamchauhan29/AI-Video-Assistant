@@ -1,4 +1,4 @@
-import whisper
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 import os
 import time
 import requests
@@ -13,6 +13,15 @@ SARVAM_PIECE_SECONDS = 25
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 
+# int8 measured on par with (or faster than) float32 in local benchmarking,
+# with essentially verbatim-matching transcript text vs the openai-whisper
+# baseline, and a much smaller memory footprint — worth defaulting to.
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+
+# Whisper's default beam_size=5 is overkill for decoding speed; 1-2 measured
+# no accuracy loss on test videos while cutting decode time noticeably.
+WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "2"))
+
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_STT_TRANSLATE_URL = "https://api.sarvam.ai/speech-to-text-translate"
@@ -22,19 +31,27 @@ _model = None
 
 
 def load_model():
+    """
+    Lazily load the faster-whisper (CTranslate2) model, wrapped in a
+    BatchedInferencePipeline for batched VAD-segment inference — loaded
+    once and reused across every chunk/video in the process, same as the
+    prior openai-whisper global-cache pattern.
+    """
 
-    global _model  
+    global _model
 
-    if _model is None: 
-        print(f"Loading Whisper model: {WHISPER_MODEL} ...")
-        _model = whisper.load_model(WHISPER_MODEL) 
+    if _model is None:
+        print(f"Loading Whisper model: {WHISPER_MODEL} (faster-whisper, {WHISPER_COMPUTE_TYPE}) ...")
+        base_model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type=WHISPER_COMPUTE_TYPE)
+        _model = BatchedInferencePipeline(model=base_model)
         print("Whisper model loaded.")
-    return _model 
+    return _model
 
 
 def transcribe_chunk_whisper(chunk_path: str) -> list:
     """
-    Transcribe one chunk with Whisper, preserving segment (and word) timing.
+    Transcribe one chunk with faster-whisper (VAD-filtered, batched
+    inference), preserving segment (and word) timing.
 
     Returns an ordered list of segments, timestamps relative to the start
     of this chunk (the caller is responsible for offsetting them into the
@@ -42,24 +59,30 @@ def transcribe_chunk_whisper(chunk_path: str) -> list:
         [{"start": float, "end": float, "text": str, "words": [...]}, ...]
     """
 
-    model = load_model()
+    pipeline = load_model()
 
-    # word_timestamps=True adds DTW alignment cost per segment, but it's
-    # what makes word-level timing available for future clip generation.
-    result = model.transcribe(chunk_path, task="transcribe", word_timestamps=True)
+    # vad_filter skips silent/non-speech stretches instead of transcribing
+    # them; word_timestamps=True adds DTW alignment cost per segment, but
+    # it's what makes word-level timing available for clip generation.
+    segments_iter, _info = pipeline.transcribe(
+        chunk_path,
+        task="transcribe",
+        beam_size=WHISPER_BEAM_SIZE,
+        vad_filter=True,
+        word_timestamps=True,
+    )
 
     segments = []
-    for seg in result.get("segments", []):
+    for seg in segments_iter:
         entry = {
-            "start": float(seg["start"]),
-            "end": float(seg["end"]),
-            "text": seg["text"].strip(),
+            "start": float(seg.start),
+            "end": float(seg.end),
+            "text": seg.text.strip(),
         }
-        words = seg.get("words")
-        if words:
+        if seg.words:
             entry["words"] = [
-                {"start": float(w["start"]), "end": float(w["end"]), "word": w["word"]}
-                for w in words
+                {"start": float(w.start), "end": float(w.end), "word": w.word}
+                for w in seg.words
             ]
         segments.append(entry)
 
