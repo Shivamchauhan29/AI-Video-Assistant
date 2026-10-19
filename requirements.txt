@@ -1,10 +1,12 @@
 # ── AI Video Assistant ── requirements.txt ────────────────────────────────────
-# Pinned to versions verified working together locally (Python 3.11).
+# Pinned to versions verified working together locally (Python 3.11+).
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # ── Audio / Video acquisition ──────────────────────────────────────────────────
 yt-dlp>=2026.8.19
 pydub==0.25.1
+# Python 3.13+ removed audioop, which pydub uses through its pyaudioop fallback.
+audioop-lts==0.2.2; python_version >= "3.13"
 ffmpeg-python==0.2.0
 
 # ── Speech-to-Text (local Whisper, CTranslate2-backed for speed) ────────────────
