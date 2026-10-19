@@ -86,7 +86,7 @@ The CLI will prompt for a YouTube URL or local file path and a language choice.
 
 - If Streamlit complains about the port being in use, stop the old process and run it again.
 - If you see missing module errors, re-run dependency installation inside the `ai-video` conda environment.
-- If FFmpeg is missing, install it separately before running audio conversion or YouTube downloads.
+- If FFmpeg is missing, install it separately before running audio conversion or YouTube downloads. Deno is optional; yt-dlp will use it automatically when available.
 - If transcription or RAG calls fail, check that the relevant API key is set in `.env`.
 
 ## Notes

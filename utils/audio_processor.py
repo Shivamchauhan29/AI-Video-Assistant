@@ -40,12 +40,6 @@ def _validate_dependencies() -> None:
             "Install with: brew install ffmpeg"
         )
 
-    if not DENO_PATH:
-        missing.append(
-            "Deno\n"
-            "Install with: brew install deno"
-        )
-
     if missing:
         raise RuntimeError(
             "\n\nMissing required dependencies:\n\n"
@@ -90,13 +84,6 @@ def download_youtube_audio(url: str, logger=None) -> str:
         "retries": 3,
         "fragment_retries": 3,
 
-        # JavaScript runtime required by modern YouTube extraction
-        "js_runtimes": {
-            "deno": {
-                "path": DENO_PATH,
-            }
-        },
-
         # Explicitly tell yt-dlp where FFmpeg is
         "ffmpeg_location": FFMPEG_PATH,
 
@@ -115,6 +102,8 @@ def download_youtube_audio(url: str, logger=None) -> str:
         # Don't print unnecessary progress bars
         "noprogress": False,
     }
+    if DENO_PATH:
+        ydl_opts["js_runtimes"] = {"deno": {"path": DENO_PATH}}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -217,17 +206,13 @@ def download_youtube_video(url: str, logger=None) -> str:
         "retries": 3,
         "fragment_retries": 3,
 
-        "js_runtimes": {
-            "deno": {
-                "path": DENO_PATH,
-            }
-        },
-
         "ffmpeg_location": FFMPEG_PATH,
 
         "quiet": False,
         "noprogress": False,
     }
+    if DENO_PATH:
+        ydl_opts["js_runtimes"] = {"deno": {"path": DENO_PATH}}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
