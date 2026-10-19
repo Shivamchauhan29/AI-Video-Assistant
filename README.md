@@ -21,8 +21,10 @@ AI Video Assistant is a Streamlit and CLI project that turns a YouTube URL or lo
 ## Requirements
 
 - Conda environment named `ai-video`.
-- Python 3.11 or newer. Python 3.13+ also needs the `audioop-lts` compatibility
-  dependency included in `requirements.txt`.
+- Python 3.11. Streamlit Cloud is pinned through `runtime.txt` because the
+  audio/transcription dependency stack is tested on Python 3.11.
+- Python 3.13+ also needs the `audioop-lts` compatibility dependency included
+  in `requirements.txt`.
 - FFmpeg installed separately and available on your PATH.
 - API keys for external services when using those features:
   - `MISTRAL_API_KEY`
